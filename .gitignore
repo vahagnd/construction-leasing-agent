@@ -7,7 +7,7 @@
 /dataSources/
 /dataSources.local.xml
 .env
-.idea
+.idea/
 __pycache__/
 *.pyc
 .venv/

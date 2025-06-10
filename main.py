@@ -1,16 +1,17 @@
-from parser.parser import parse_data_from_fedresurs
-from agent.agent import agent_executor
-import time
-import random
+import streamlit as st
 import json
+from datetime import datetime
+from agent.agent import agent_executor
+from parser.parser import parse_data_from_fedresurs
 
-def main():
-    # DEBUG
-    count = 0
+DATA_FILE = "data/contracts.json"
 
-    starting_date = '2025-01-20'
-    ending_date = '2025-02-01'
-    dirty_data = parse_data_from_fedresurs(starting_date, ending_date)
+def run_agent_and_save(start_date: str, end_date: str):
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump([], f, ensure_ascii=False, indent=2)
+
+    dirty_data = parse_data_from_fedresurs(start_date, end_date)
 
     for dirty_text in dirty_data:
         system_prompt = (
@@ -25,18 +26,46 @@ def main():
             "Используй доступные тебе инструменты, чтобы выполнить задание. Не делай шаги сам, вызывай нужные функции.\n"
             "Не придумывай информацию, вся информация в тексте лизингового контракта."
         )
+        _ = agent_executor.run(system_prompt)
 
-        result = agent_executor.run(
-            system_prompt
-        )
+def load_data():
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
 
-        print(result)
+def visualize_data(data):
+    st.subheader("Обработанные лизинговые контракты")
 
-        time.sleep(random.uniform(2, 6))
+    if not data:
+        st.info("Данные отсутствуют. Запустите анализ.")
 
-        # DEBUG
-        print(count)
-        count += 1
+    for entry in data:
+        st.json(entry["text"])
+
+def main():
+    st.title("Дашборд анализа лизинговых контрактов")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("Дата начала", value=datetime(2025, 1, 1))
+    with col2:
+        end_date = st.date_input("Дата окончания", value=datetime(2025, 2, 1))
+
+    if st.button("Запустить анализ"):
+        st.info("Запуск анализа... Пожалуйста, подождите.")
+        run_agent_and_save(str(start_date), str(end_date))
+        st.success("Анализ завершён! Данные сохранены.")
+
+    data = load_data()
+    visualize_data(data)
+
+    # Optional: Downloadable JSON
+    with open("data/contracts.json", "r", encoding="utf-8") as f:
+        data = f.read()
+
+    st.download_button("📥 Скачать JSON", data, file_name="contracts.json", mime="application/json")
 
 if __name__ == "__main__":
     main()

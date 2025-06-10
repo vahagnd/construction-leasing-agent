@@ -1,5 +1,4 @@
 from langchain.agents import initialize_agent, AgentType, tool, AgentExecutor
-# from langchain_core.tools import tool
 from langchain_together import Together
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
@@ -108,7 +107,7 @@ def save_leasing_info(contract_info: str) -> str:
     # Call the tool directly (simulate how agent would call it)
     date = extract_contract_date.run(contract_info)
 
-    file_path = "data/structured_data.json"
+    file_path = "data/contracts.json"
 
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:

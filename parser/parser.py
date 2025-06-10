@@ -1,7 +1,6 @@
 import requests
 import time
 import random
-import json
 
 def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='2025-06-01') -> list:
     data = []
@@ -38,8 +37,9 @@ def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='202
                     continue
         except:
             continue
-        time.sleep(random.uniform(1, 4))
+        time.sleep(random.uniform(2, 6))
 
+    print(f"Contracts parsed: {len(data)}")
     return list(set(data))
 
 # Example Usage
