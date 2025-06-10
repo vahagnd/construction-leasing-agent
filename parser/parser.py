@@ -3,21 +3,7 @@ import time
 import random
 import json
 
-def load_checked_items(checked_items_file):
-    try:
-        with open(checked_items_file, "r") as f:
-            return set(json.load(f))
-    except FileNotFoundError:
-        return set()
-
-def save_checked_items(checked_items_file, items_set):
-    with open(checked_items_file, "w") as f:
-        json.dump(sorted(items_set), f)
-
-
 def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='2025-06-01') -> list:
-    checked_dates_file = "checked_dates.json"
-    checked_dates = load_checked_items(checked_dates_file)
     data = []
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -31,7 +17,7 @@ def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='202
 
     contracts_found = first_info_json['found']
     print(f"Contracts found: {contracts_found}")
-    time.sleep(random.uniform(2, 6))
+    time.sleep(random.uniform(1, 4))
 
     for offset in range(0, contracts_found, 15):
         try:
@@ -46,22 +32,14 @@ def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='202
                     date_signed = '.'.join(reversed(date_signed.split('-')))
                     company_name = info_json['pageData'][contract_i]['weakSide'][0]['name']
                     contract_info = info_json['pageData'][contract_i]['searchStringHighlights'][1]
-
-                    if date_signed in checked_dates:
-                        data.append(f"CHECKED:{date_signed}")
-                    else:
-                        prompt_string = f"Компания: {company_name}\nДата заключения контракта: {date_signed}\nИнформация о контракте:\n{contract_info}"
-                        data.append(prompt_string)
-                        checked_dates.add(date_signed)
-                        save_checked_items(checked_dates_file, checked_dates)
+                    prompt_string = f"Компания: {company_name}\nДата заключения контракта: {date_signed}\nИнформация о контракте:\n{contract_info}"
+                    data.append(prompt_string)
                 except IndexError:
                     continue
         except:
             continue
-        time.sleep(random.uniform(2, 6))
+        time.sleep(random.uniform(1, 4))
 
-    print(f"Contracts parsed: {len(data)}")
-    print(list(set(data)))
     return list(set(data))
 
 # Example Usage

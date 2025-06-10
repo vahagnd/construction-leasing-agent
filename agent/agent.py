@@ -1,4 +1,4 @@
-from langchain.agents import initialize_agent, AgentType, tool
+from langchain.agents import initialize_agent, AgentType, tool, AgentExecutor
 # from langchain_core.tools import tool
 from langchain_together import Together
 from langchain.prompts import PromptTemplate
@@ -33,7 +33,7 @@ def extract_information(contract_text: str) -> str:
             "Проанализируй следующий текст лизингового контракта и выведи "
             "название компании заключившего контракт, дату заключения контракта, предмет лизинга.\n"
             "Выводи СТРОГО по формату:\n"
-            "Комания <комания> заключила сделку лизинга на <предмет лизинга> на <дата заключения контракта на русском>.\n"
+            "Комания <комания> заключила сделку лизинга на <предмет лизинга> <дата заключения контракта на русском>.\n"
             "Выводи только одно предложение.\n"
             "НЕ ПРИДУМЫВАЙ ИНФОРМЦИЮ, все есть в тексте.\n"
             "Не выводи *\n"
@@ -108,7 +108,7 @@ def save_leasing_info(contract_info: str) -> str:
     # Call the tool directly (simulate how agent would call it)
     date = extract_contract_date.run(contract_info)
 
-    file_path = "structured_data.json"
+    file_path = "data/structured_data.json"
 
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -131,8 +131,17 @@ agent = initialize_agent(
     tools=tools,
     llm=llm,
     agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    verbose=True
+    verbose=False
 )
+
+# Parsing error handling
+agent_executor = AgentExecutor.from_agent_and_tools(
+    agent=agent.agent,
+    tools=tools,
+    verbose=False,
+    handle_parsing_errors=True # Important
+)
+
 
 # ---- Example Usage ----
 if __name__ == "__main__":
@@ -145,7 +154,7 @@ if __name__ == "__main__":
         "Комментарий пользователя: <res>Заключение</res>"
     )
 
-    input_text_contrcution = (
+    input_text_construction = (
         'Компания: ООО "СТРОЙГРАНИТ"\n'
         "Дата заключения контракта: 22.05.2025\n"
         "Информация о контракте:\n"
@@ -155,7 +164,7 @@ if __name__ == "__main__":
     )
 
     query = (
-        f"Вот неструктурированный текст лизингового контракта:\n{input_text_contrcution}\n\n"
+        f"Вот неструктурированный текст лизингового контракта:\n{input_text_construction}\n\n"
         "Твоя задача:\n"
         "1. Извлеки из текста информацию о сделке: название компании, предмет лизинга и дату заключения контракта. "
         "Оформи это в одно предложение.\n"
@@ -167,7 +176,7 @@ if __name__ == "__main__":
         "Не придумывай информацию, вся информация в тексте лизингового контракта."
     )
 
-    result = agent.run(
+    result = agent_executor.run(
         query
     )
 
