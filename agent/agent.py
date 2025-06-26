@@ -97,7 +97,7 @@ def extract_contract_date(contract_structured_text: str) -> str:
     result = chain.invoke({"contract_structured_text": contract_structured_text})
     return result["text"].strip()
 
-# ---- TOOL 3: Create or modify text document ----
+# ---- TOOL 4: Create or modify text document ----
 @tool
 def save_leasing_info(contract_info: str) -> str:
     """
