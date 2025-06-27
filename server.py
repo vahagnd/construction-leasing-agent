@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import asyncio
 from dotenv import load_dotenv
 from langchain_together import Together
 from langchain.prompts import PromptTemplate
@@ -24,9 +25,9 @@ extract_info_prompt = PromptTemplate(
         "Проанализируй следующий текст лизингового контракта и выведи "
         "название компании заключившего контракт, дату заключения контракта, предмет лизинга.\n"
         "Выводи СТРОГО по формату:\n"
-        "Комания <комания> заключила сделку лизинга на <предмет лизинга> <дата заключения контракта на русском>.\n"
+        "Компания <компания> заключила сделку лизинга на <предмет лизинга> <дата заключения контракта на русском>.\n"
         "Выводи только одно предложение.\n"
-        "НЕ ПРИДУМЫВАЙ ИНФОРМЦИЮ, все есть в тексте.\n"
+        "НЕ ПРИДУМЫВАЙ ИНФОРМАЦИЮ, все есть в тексте.\n"
         "Не выводи *\n"
         "НЕ ВЫВОДИ больше ничего.\n"
         "Текст: {contract_text}\n"
@@ -57,14 +58,16 @@ extract_date_prompt = PromptTemplate(
     )
 )
 
-# === TOOL DEFINITIONS ===
-TOOLS = [
-    {
-        "type": "tool",
-        "name": "extract_information",
-        "description": """Извлекает из неструктурированного текста лизингового договора
-    название компании заключившего контракт, дата заключения контракта, название предмета лизинга.
-    Собирает все это в одно предложение по формату 'Компания company_name заключила сделку лизинга на product_name contract_date(дата на русском)'.""",
+PROMPTS = {
+    "extract_info_prompt" : extract_info_prompt,
+    "extract_date_prompt" : extract_date_prompt,
+    "classify_prompt" : classify_prompt,
+}
+
+# === TOOLS ===
+TOOLS = {
+    "extract_information": {
+        "description": "Извлекает из неструктурированного текста лизингового договора информацию о компании, дате и предмете лизинга",
         "parameters": {
             "type": "object",
             "properties": {
@@ -73,15 +76,8 @@ TOOLS = [
             "required": ["contract_text"]
         }
     },
-    {
-        "type": "tool",
-        "name": "classify_contract",
-        "description": """
-    Получает структурированную информацию о контракте лизинга.
-    Классифицирует описание предмета лизинга как строительную технику или нет с помощью LLM.
-    Если предмет — строительная техника, возвращает текст как есть.
-    Если нет — возвращает '400'.
-    """,
+    "classify_contract": {
+        "description": "Классифицирует предмет лизинга как строительную технику или нет",
         "parameters": {
             "type": "object",
             "properties": {
@@ -90,13 +86,8 @@ TOOLS = [
             "required": ["product_description"]
         }
     },
-    {
-        "type": "tool",
-        "name": "extract_contract_date",
-        "description": """
-    Извлекает дату заключения контракта из структурированного текста лизинговой сделки.
-    Возвращает дату в формате гггг-мм-дд. Не добавляет ничего лишнего.
-    """,
+    "extract_contract_date": {
+        "description": "Извлекает дату заключения контракта в формате YYYY-MM-DD",
         "parameters": {
             "type": "object",
             "properties": {
@@ -105,13 +96,8 @@ TOOLS = [
             "required": ["contract_structured_text"]
         }
     },
-    {
-        "type": "tool",
-        "name": "save_leasing_info",
-        "description": """
-    Сохраняет информацию о лизинговом контракте и дате в JSON.
-    Принимает только одну строку. Вызывает LLM-функцию для извлечения даты.
-    """,
+    "save_leasing_info": {
+        "description": "Сохраняет информацию о лизинговом контракте в JSON файл",
         "parameters": {
             "type": "object",
             "properties": {
@@ -120,7 +106,7 @@ TOOLS = [
             "required": ["contract_info"]
         }
     }
-]
+}
 
 # === TOOL HANDLERS ===
 def extract_information(contract_text):
@@ -162,21 +148,81 @@ TOOL_HANDLERS = {
     "save_leasing_info": save_leasing_info,
 }
 
-# === MCP LOOP ===
+# === SERVER ===
+def handle_message(message):
+    try:
+        data = json.loads(message)
+        method = data.get("method")
+        params = data.get("params", {})
+        request_id = data.get("id")
+
+        if method == "initialize":
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "protocolVersion": "1.0.0",
+                    "capabilities": {
+                        "tools": True
+                    }
+                }
+            }
+
+        elif method == "tools/list":
+            tools_list = []
+            for name, tool in TOOLS.items():
+                tools_list.append({
+                    "name": name,
+                    "description": tool["description"],
+                    "inputSchema": tool["parameters"]
+                })
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"tools": tools_list}
+            }
+
+        elif method == "tools/call":
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+
+            if tool_name in TOOL_HANDLERS:
+                result = TOOL_HANDLERS[tool_name](**arguments)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": result}]
+                    }
+                }
+            else:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32601, "message": f"Tool not found: {tool_name}"}
+                }
+
+        else:
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": f"Method not found: {method}"}
+            }
+
+    except Exception as e:
+        return {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32603, "message": str(e)}
+        }
+
 def main():
     for line in sys.stdin:
-        req = json.loads(line)
-        if req["type"] == "list_tools":
-            print(json.dumps({"type": "tool_list", "tools": TOOLS}))
-        elif req["type"] == "call_tool":
-            try:
-                tool_name = req["tool_name"]
-                args = req["args"]
-                result = TOOL_HANDLERS[tool_name](**args)
-                print(json.dumps({"type": "tool_result", "output": result}))
-            except Exception as e:
-                print(json.dumps({"type": "tool_result", "output": f"ERROR: {str(e)}"}))
-        sys.stdout.flush()
+        line = line.strip()
+        if line:
+            response = handle_message(line)
+            print(json.dumps(response, ensure_ascii=False))
+            sys.stdout.flush()
 
 if __name__ == "__main__":
     main()
