@@ -1,228 +1,123 @@
-import sys
-import os
 import json
-import asyncio
-from dotenv import load_dotenv
-from langchain_together import Together
-from langchain.prompts import PromptTemplate
+import os
+from mcp.server.fastmcp import FastMCP, Context
+from mcp.types import GetPromptResult
 from langchain.chains import LLMChain
+import requests
+import time
+import random
 
-load_dotenv()
+# Create MCP server
+mcp = FastMCP("leasing-contract-server")
 
-llm = Together(
-    model="lgai/exaone-3-5-32b-instruct",
-    temperature=0.0,
-    max_tokens=200,
-)
-
-DATA_PATH = "data/contracts.json"
-
-# === PROMPTS ===
-extract_info_prompt = PromptTemplate(
-    input_variables=["contract_text"],
-    template=(
-        "Ты — профессиональный аналитик договоров лизинга. "
-        "Проанализируй следующий текст лизингового контракта и выведи "
-        "название компании заключившего контракт, дату заключения контракта, предмет лизинга.\n"
-        "Выводи СТРОГО по формату:\n"
-        "Компания <компания> заключила сделку лизинга на <предмет лизинга> <дата заключения контракта на русском>.\n"
-        "Выводи только одно предложение.\n"
-        "НЕ ПРИДУМЫВАЙ ИНФОРМАЦИЮ, все есть в тексте.\n"
-        "Не выводи *\n"
-        "НЕ ВЫВОДИ больше ничего.\n"
-        "Текст: {contract_text}\n"
-        "Ответ:"
-    )
-)
-
-classify_prompt = PromptTemplate(
-    input_variables=["product_description"],
-    template=(
-        "Ты эксперт по строительной технике.\n"
-        "По описанию предмета лизинга определи, является ли он строительной техникой.\n"
-        "Если это строительная техника, выведи текст как есть.\n"
-        "Если это НЕ строительная техника, выводи '400'.\n"
-        "Не добавляй пояснений, не используй символы '*', не выводи больше одного предложения.\n"
-        "Описание: {product_description}\n"
-        "Ответ:"
-    )
-)
-
-extract_date_prompt = PromptTemplate(
-    input_variables=["contract_structured_text"],
-    template=(
-        "Ты аналитик, получивший строку с структурированным текстом лизингового контракта.\n"
-        "Твоя задача — выделить только дату заключения контракта из строки.\n"
-        "Текст контракта: {contract_structured_text}\n"
-        "Ответь только одной строкой: дата в формате гггг-мм-дд, без лишнего текста, без слов 'дата', без кавычек, без точки, без '*'."
-    )
-)
-
-PROMPTS = {
-    "extract_info_prompt" : extract_info_prompt,
-    "extract_date_prompt" : extract_date_prompt,
-    "classify_prompt" : classify_prompt,
-}
-
-# === TOOLS ===
-TOOLS = {
-    "extract_information": {
-        "description": "Извлекает из неструктурированного текста лизингового договора информацию о компании, дате и предмете лизинга",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "contract_text": {"type": "string"}
-            },
-            "required": ["contract_text"]
-        }
-    },
-    "classify_contract": {
-        "description": "Классифицирует предмет лизинга как строительную технику или нет",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "product_description": {"type": "string"}
-            },
-            "required": ["product_description"]
-        }
-    },
-    "extract_contract_date": {
-        "description": "Извлекает дату заключения контракта в формате YYYY-MM-DD",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "contract_structured_text": {"type": "string"}
-            },
-            "required": ["contract_structured_text"]
-        }
-    },
-    "save_leasing_info": {
-        "description": "Сохраняет информацию о лизинговом контракте в JSON файл",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "contract_info": {"type": "string"}
-            },
-            "required": ["contract_info"]
-        }
+# ---- Helper Functions ----
+def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='2025-06-01') -> list:
+    data = []
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Referer": "https://fedresurs.ru/search/encumbrances",  # important
     }
-}
 
-# === TOOL HANDLERS ===
-def extract_information(contract_text):
-    chain = LLMChain(llm=llm, prompt=extract_info_prompt)
-    response = chain.invoke({"contract_text": contract_text})
-    return response["text"].strip()
+    first_url = f"https://fedresurs.ru/backend/encumbrances?searchString=%D0%97%D0%B0%D0%BA%D0%BB%D1%8E%D1%87%D0%B5%D0%BD%D0%B8%D0%B5%20%D0%B4%D0%BE%D0%B3%D0%BE%D0%B2%D0%BE%D1%80%D0%B0&group=Leasing&publishDateStart={start_date}T00%3A00%3A00&publishDateEnd={end_date}T23%3A59%3A59&limit=15&offset=0"
+    first_response = requests.get(first_url, headers=headers)
+    first_info_json = first_response.json()
 
-def classify_contract(product_description):
-    chain = LLMChain(llm=llm, prompt=classify_prompt)
-    response = chain.invoke({"product_description": product_description})
-    return response["text"].strip()
+    contracts_found = first_info_json['found']
+    print(f"Contracts found: {contracts_found}")
+    time.sleep(random.uniform(1, 4))
 
-def extract_contract_date(contract_structured_text):
-    chain = LLMChain(llm=llm, prompt=extract_date_prompt)
-    response = chain.invoke({"contract_structured_text": contract_structured_text})
-    return response["text"].strip()
+    for offset in range(0, contracts_found, 15):
+        try:
+            url = f"https://fedresurs.ru/backend/encumbrances?searchString=%D0%97%D0%B0%D0%BA%D0%BB%D1%8E%D1%87%D0%B5%D0%BD%D0%B8%D0%B5%20%D0%B4%D0%BE%D0%B3%D0%BE%D0%B2%D0%BE%D1%80%D0%B0&group=Leasing&publishDateStart={start_date}T00%3A00%3A00&publishDateEnd={end_date}T23%3A59%3A59&limit=15&offset={offset}"
 
-def save_leasing_info(contract_info):
-    os.makedirs("data", exist_ok=True)
-    date = extract_contract_date(contract_info)
+            response = requests.get(url, headers=headers)
+            info_json = response.json()
 
-    if os.path.exists(DATA_PATH):
-        with open(DATA_PATH, "r", encoding="utf-8") as f:
+            for contract_i in range(min(15, contracts_found - offset)):
+                try:
+                    date_signed = info_json['pageData'][contract_i]['publishDate'][:10]
+                    date_signed = '.'.join(reversed(date_signed.split('-')))
+                    company_name = info_json['pageData'][contract_i]['weakSide'][0]['name']
+                    contract_info = info_json['pageData'][contract_i]['searchStringHighlights'][1]
+                    prompt_string = f"Компания: {company_name}\nДата заключения контракта: {date_signed}\nИнформация о контракте:\n{contract_info}"
+                    data.append(prompt_string)
+                except IndexError:
+                    continue
+        except:
+            continue
+        time.sleep(random.uniform(2, 6))
+
+    print(f"Contracts parsed: {len(data)}")
+    return list(set(data))
+
+# -- Resource: fetch info from website
+@mcp.resource("fedresurs://contracts/{start_date}/{finish_date}")
+def fetch_contracts(start_date: str, finish_date: str) -> dict:
+    """
+    Парсит и возвращает список строк с текстами контрактов из Fedresurs
+    между start_date и finish_date (включительно).
+    """
+    raw_data_list = parse_data_from_fedresurs(start_date, finish_date)  # list[str]
+    return {"contracts": raw_data_list}
+
+
+# -- Tool: create or modify text document
+@mcp.tool()
+def save_leasing_info(contract_info: str) -> str:
+    """
+    Сохраняет информацию о лизинговом контракте и дате в JSON.
+    Принимает только одну строку со структурированной информацией о контракте.
+    """
+    file_path = "data/contracts.json"
+
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     else:
         data = []
 
-    data.append({"text": contract_info, "date": date})
+    data.append({"contract_info": contract_info})
 
-    with open(DATA_PATH, "w", encoding="utf-8") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    return f"Контракт сохранен. Дата: {date}"
+    return f"Контракт сохранен."
 
-TOOL_HANDLERS = {
-    "extract_information": extract_information,
-    "classify_contract": classify_contract,
-    "extract_contract_date": extract_contract_date,
-    "save_leasing_info": save_leasing_info,
-}
+# -- Prompt: all logic is embedded into a single prompt template
+@mcp.prompt()
+def promptishe(contract_text: str) -> str:
+    return (
+        "Ты — профессиональный аналитик договоров лизинга.\n"
+        "Тебе нужно из следующего текста:\n"
+        "- определить название компании, заключившей контракт\n"
+        "- определить дату заключения контракта (в формате гггг-мм-дд)\n"
+        "- определить предмет лизинга\n"
+        "- определить, является ли предмет строительной техникой\n\n"
+        "Если предмет является строительной техникой, выводи в формате:\n"
+        "'Компания <название компании> заключила сделку лизинга на <предмет лизинга> <дата в формате гггг-мм-дд>.'"
+        "Если же предмет лизинга НЕ строительная техника: выводи '400'."
+        "Ничего не придумывай. Не добавляй лишнего. Не используй кавычки, точки, *, пояснения или дополнительные строки.\n"
+        "Не придумывай информацию, все есть в тексте контракта."
+        f"\nТекст контракта:\n{{contract_text}}\n"
+        "\nОтвет:"
+    )
 
-# === SERVER ===
-def handle_message(message):
-    try:
-        data = json.loads(message)
-        method = data.get("method")
-        params = data.get("params", {})
-        request_id = data.get("id")
+# -- Tool : calls prompt via client sampling
+@mcp.tool()
+def analyze_contract_text(contract_text: str, ctx: Context) -> str:
+    """
+    Извлекает из неструктурированного текста лизингового договора
+    название компании заключившего контракт, дата заключения контракта, название предмета лизинга.
+    Классифицирует предмет как строительная техника или нет. Если ДА, то выводит все в одном предложении по формату
+    'Компания <название компании> заключила сделку лизинга на <предмет лизинга> <дата в формате гггг-мм-дд>.'.
+    Если НЕТ, то выводит '400'.
+    """
+    result: GetPromptResult = ctx.get_prompt("promptishe", {
+        "contract_text": contract_text
+    })
 
-        if method == "initialize":
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "protocolVersion": "1.0.0",
-                    "capabilities": {
-                        "tools": True
-                    }
-                }
-            }
-
-        elif method == "tools/list":
-            tools_list = []
-            for name, tool in TOOLS.items():
-                tools_list.append({
-                    "name": name,
-                    "description": tool["description"],
-                    "inputSchema": tool["parameters"]
-                })
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {"tools": tools_list}
-            }
-
-        elif method == "tools/call":
-            tool_name = params.get("name")
-            arguments = params.get("arguments", {})
-
-            if tool_name in TOOL_HANDLERS:
-                result = TOOL_HANDLERS[tool_name](**arguments)
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "content": [{"type": "text", "text": result}]
-                    }
-                }
-            else:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32601, "message": f"Tool not found: {tool_name}"}
-                }
-
-        else:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32601, "message": f"Method not found: {method}"}
-            }
-
-    except Exception as e:
-        return {
-            "jsonrpc": "2.0",
-            "id": None,
-            "error": {"code": -32603, "message": str(e)}
-        }
-
-def main():
-    for line in sys.stdin:
-        line = line.strip()
-        if line:
-            response = handle_message(line)
-            print(json.dumps(response, ensure_ascii=False))
-            sys.stdout.flush()
+    return result.messages[0].content.text.strip()
 
 if __name__ == "__main__":
-    main()
+    mcp.run(transport="stdio")

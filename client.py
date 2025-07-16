@@ -1,122 +1,60 @@
-import subprocess
-import json
-import sys
+import asyncio
+from mcp.client.stdio import stdio_client
+from mcp import ClientSession
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain.agents import initialize_agent, Tool
+from langchain_together import Together
+from dotenv import load_dotenv
 
-class Client:
-    def __init__(self, server_script="server.py"):
-        self.server_script = server_script
-        self.process = None
-        self.request_id = 0
+load_dotenv()  # Load TOGETHER_API_KEY
 
-    def start(self):
-        self.process = subprocess.Popen(
-            [sys.executable, self.server_script],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+llama = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
+exaone = "lgai/exaone-3-5-32b-instruct"
+exaone_deep = "lgai/exaone-deep-32b"
 
-        # Initialize server
-        response = self.send_request({
-            "jsonrpc": "2.0",
-            "id": self.next_id(),
-            "method": "initialize",
-            "params": {}
-        })
-        return response
 
-    def next_id(self):
-        self.request_id += 1
-        return self.request_id
+async def main():
+    # 1. Connect to your server
+    server_params = stdio_client(command="python", args=["server.py"])
 
-    def send_request(self, request):
-        if not self.process:
-            raise RuntimeError("Server not started")
+    llama = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
+    exaone = "lgai/exaone-3-5-32b-instruct"
+    exaone_deep = "lgai/exaone-deep-32b"
 
-        request_json = json.dumps(request, ensure_ascii=False)
-        self.process.stdin.write(request_json + "\n")
-        self.process.stdin.flush()
+    llm = Together(
+        model=exaone,
+        temperature=0.0,
+        max_tokens=200
+    )
 
-        response_line = self.process.stdout.readline()
-        if not response_line:
-            stderr_output = self.process.stderr.read()
-            raise RuntimeError(f"Server error: {stderr_output}")
+    async with server_params as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
 
-        return json.loads(response_line.strip())
+            tools = await load_mcp_tools(session)
+            agent = initialize_agent(tools, llm, agent="zero-shot-react-description", verbose=True)
 
-    def list_tools(self):
-        request = {
-            "jsonrpc": "2.0",
-            "id": self.next_id(),
-            "method": "tools/list"
-        }
-        return self.send_request(request)
+            tools_response = await session.list_tools()
+            print("Available tools: ", [tool.name for tool in tools_response.tools])
 
-    def call_tool(self, name, arguments):
-        request = {
-            "jsonrpc": "2.0",
-            "id": self.next_id(),
-            "method": "tools/call",
-            "params": {
-                "name": name,
-                "arguments": arguments
-            }
-        }
-        return self.send_request(request)
+            result = await session.read_resource("fedresurs://contracts/2025-01-20/2025-02-01")
+            contracts = result.content["contracts"]
 
-    def close(self):
-        if self.process:
-            self.process.stdin.close()
-            self.process.terminate()
-            self.process.wait()
+            for i, contract in enumerate(contracts):
+                input_text = (
+                    f"Вот контракт: {contract.strip()}\n\n"
+                    "Проанализируй этот контракт. "
+                    "Используй инструмент 'analyze_contract_text', чтобы извлечь информацию. "
+                    "Если результат НЕ равен '400', сохрани результат с помощью 'save_leasing_info'. "
+                    "Если результат — '400', ничего не делай."
+                )
 
-def test():
-    client = Client()
+                print(f"\nОбработка контракта #{i + 1}/{len(contracts)}")
+                try:
+                    await agent.arun(input_text)
+                except Exception as e:
+                    print(f"Ошибка при обработке: {e}")
 
-    try:
-        print("Starting server...")
-        init_response = client.start()
-        print(f"Init: {init_response}")
+            print(result)
 
-        print("\nListing tools...")
-        tools_response = client.list_tools()
-        print(f"Tools: {json.dumps(tools_response, ensure_ascii=False, indent=2)}")
-
-        sample_contract = """
-        Договор лизинга №123/2024
-        Между ООО "СтройТех" (Лизингодатель) и ИП Иванов А.И. (Лизингополучатель)
-        заключен настоящий договор лизинга 15 марта 2024 года.
-        Предмет лизинга: Экскаватор JCB JS220LC
-        Стоимость: 3,500,000 рублей
-        """
-
-        print("\nExtracting information...")
-        extract_response = client.call_tool("extract_information", {
-            "contract_text": sample_contract
-        })
-        print(f"Extract: {json.dumps(extract_response, ensure_ascii=False, indent=2)}")
-
-        if "result" in extract_response:
-            contract_info = extract_response["result"]["content"][0]["text"]
-
-            print("\nClassifying contract...")
-            classify_response = client.call_tool("classify_contract", {
-                "product_description": contract_info
-            })
-            print(f"Classify: {json.dumps(classify_response, ensure_ascii=False, indent=2)}")
-
-            print("\nSaving contract...")
-            save_response = client.call_tool("save_leasing_info", {
-                "contract_info": contract_info
-            })
-            print(f"Save: {json.dumps(save_response, ensure_ascii=False, indent=2)}")
-
-    except Exception as e:
-        print(f"Error: {e}")
-
-    finally:
-        client.close()
-
-if __name__ == "__main__":
-    test()
+asyncio.run(main())
