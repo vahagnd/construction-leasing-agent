@@ -1,11 +1,18 @@
 import json
 import os
 from mcp.server.fastmcp import FastMCP, Context
-from mcp.types import GetPromptResult
+from mcp import types
 from langchain.chains import LLMChain
 import requests
 import time
 import random
+import asyncio
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+CONTRACTS_PATH = os.getenv("CONTRACTS_PATH")
 
 # Create MCP server
 mcp = FastMCP("leasing-contract-server")
@@ -61,15 +68,14 @@ def fetch_contracts(start_date: str, finish_date: str) -> dict:
     raw_data_list = parse_data_from_fedresurs(start_date, finish_date)  # list[str]
     return {"contracts": raw_data_list}
 
-
 # -- Tool: create or modify text document
 @mcp.tool()
-def save_leasing_info(contract_info: str) -> str:
+async def save_leasing_info(contract_info: str) -> str:
     """
     Сохраняет информацию о лизинговом контракте в JSON.
     Принимает только одну строку со структурированной информацией о контракте.
     """
-    file_path = "data/contracts.json"
+    file_path = CONTRACTS_PATH
 
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -84,40 +90,68 @@ def save_leasing_info(contract_info: str) -> str:
 
     return f"Контракт сохранен."
 
-# -- Prompt: all logic is embedded into a single prompt template
-@mcp.prompt()
-def promptishe(contract_text: str) -> str:
-    return (
-        "Ты — профессиональный аналитик договоров лизинга.\n"
-        "Тебе нужно из следующего текста:\n"
+
+# # -- Prompt: all logic is embedded into a single prompt template
+# @mcp.prompt()
+# def promptishe(contract_text: str) -> str:
+#     return (
+#         "Ты — профессиональный аналитик договоров лизинга.\n"
+#         "Тебе нужно из следующего текста:\n"
+#         "- определить название компании, заключивший контракт\n"
+#         "- определить дату заключения контракта (в формате гггг-мм-дд)\n"
+#         "- определить предмет лизинга\n"
+#         "- определить, является ли предмет строительной техникой\n\n"
+#         "Если предмет является строительной техникой, выводи в формате:\n"
+#         "'Компания <название компании> заключила сделку лизинга на <предмет лизинга> <дата в формате гггг-мм-дд>.'"
+#         "Если же предмет лизинга НЕ строительная техника: выводи '400'."
+#         "Ничего не придумывай. Не добавляй лишнего. Не используй ковычки, точки, *, пояснения или дополнительные строки.\n"
+#         "Не придумывай информацию, все есть в тексте контракта."
+#         f"\nТекст контракта:\n{{contract_text}}\n"
+#         "\nОтвет:"
+#     )
+
+# -- Tool : calls model giving it prompt via client sampling
+@mcp.tool()
+async def analyze_contract_text(contract_text: str, ctx: Context) -> str:
+    """
+    Извлекает из неструктурированного текста лизингового договора
+    название компании заключившего контракт, дата заключения контракта, название предмета лизинга.
+    Классифицирует предмет лизинга как строительая техника или нет.
+    Если предмет НЕ строительная техника - выводит ОДНО ЧИСЛО - 400.
+    Если же предмет строительая техника, то
+    собирает все в одном предложении по формату:
+    'Компания <название компании> заключила сделку лизинга на <предмет лизинга> <дата в формате гггг-мм-дд>.'.
+    """
+    prompt = (
+        "Тебе нужно из следующего текста контракта:\n"
         "- определить название компании, заключивший контракт\n"
         "- определить дату заключения контракта (в формате гггг-мм-дд)\n"
         "- определить предмет лизинга\n"
         "- определить, является ли предмет строительной техникой\n\n"
-        "Если предмет является строительной техникой, выводи в формате:\n"
+        "Если предмет лизинга НЕ является строительной техиникой - выведи ТОЛьКО ОДНО ЧИСЛО - 400. "
+        "Если же предмет лизинга строительная техника, то:\n"
+        "собери информацию в предложении по формату:\n"
         "'Компания <название компании> заключила сделку лизинга на <предмет лизинга> <дата в формате гггг-мм-дд>.'"
-        "Если же предмет лизинга НЕ строительная техника: выводи '400'."
         "Ничего не придумывай. Не добавляй лишнего. Не используй ковычки, точки, *, пояснения или дополнительные строки.\n"
         "Не придумывай информацию, все есть в тексте контракта."
-        f"\nТекст контракта:\n{{contract_text}}\n"
+        "\nТекст контракта:\n{contract_text}\n"
         "\nОтвет:"
+    ).format(contract_text=contract_text)
+
+    result = await ctx.session.create_message(
+        messages=[
+            types.SamplingMessage(
+                role="user",
+                content=types.TextContent(type="text", text=prompt),
+            )
+        ],
+        max_tokens=200,
+        temperature=0
     )
 
-# -- Tool : calls prompt via client sampling
-@mcp.tool()
-def analyze_contract_text(contract_text: str, ctx: Context) -> str:
-    """
-    Извлекает из неструктурированного текста лизингового договора
-    название компании заключившего контракт, дата заключения контракта, название предмета лизинга.
-    Классифицирует предмет как строительная техника или нет. Если ДА, то выводит все в одном предложении по формату
-    'Компания <название компании> заключила сделку лизинга на <предмет лизинга> <дата в формате гггг-мм-дд>.'.
-    Если НЕТ, то выводит '400'.
-    """
-    result: GetPromptResult = ctx.get_prompt("promptishe", {
-        "contract_text": contract_text
-    })
-
-    return result.messages[0].content.text.strip()
+    if result.content.type == "text":
+        return result.content.text
+    return str(result.content)
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
