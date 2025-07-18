@@ -54,8 +54,8 @@ async def sampling_message_callback(
         }
     ]
 
-    sleep(1) # to handle too many requests
-    logging.debug("sleeping for 1 second")
+    logging.debug("sleeping before sampling llm call")
+    sleep(2) # to handle too many requests
     with OpenAI(base_url=TOGETHER_URL, api_key=API_KEY) as sampling_llm_client:
         completion = sampling_llm_client.chat.completions.create(
             model=MODEL_NAME,
@@ -101,19 +101,19 @@ async def main():
             set_tools(tools_response.tools)
             logger.info("tools:\n%s", pformat(tools_specs))
 
-            # result = await session.read_resource("fedresurs://contracts/2025-01-20/2025-02-01")
-            # contracts = json.loads(result.contents[0].text)["contracts"]
+            result = await session.read_resource("fedresurs://contracts/2025-01-20/2025-02-01")
+            contracts = json.loads(result.contents[0].text)["contracts"]
 
-            input_text = (
-                'Компания: ООО "СТРОЙМАГИСТРАЛЬ"\n'
-                "Дата заключения контракта: 14.04.2025\n"
-                "Информация о контракте:\n"
-                "Предмет финансовой аренды: LZZ7CMWDXRC643572, 0106008 экскаваторы, SITRAK C7H MAX\n"
-                "Срок финансовой аренды: 15.04.2025 - 15.03.2028\n"
-                "Комментарий пользователя: <res>Заключение</res>"
-            )
-
-            contracts = [input_text]
+            # input_text = (
+            #     'Компания: ООО "СТРОЙМАГИСТРАЛЬ"\n'
+            #     "Дата заключения контракта: 14.04.2025\n"
+            #     "Информация о контракте:\n"
+            #     "Предмет финансовой аренды: LZZ7CMWDXRC643572, 0106008 экскаваторы, SITRAK C7H MAX\n"
+            #     "Срок финансовой аренды: 15.04.2025 - 15.03.2028\n"
+            #     "Комментарий пользователя: <res>Заключение</res>"
+            # )
+            #
+            # contracts = [input_text]
 
             with OpenAI(base_url=TOGETHER_URL, api_key=API_KEY) as llm_client:
                 for contract in contracts:
@@ -142,7 +142,8 @@ async def main():
                                 "content": f"Вот текст контракта: {contract.strip()}."
                             }
                         ]
-
+                        logging.debug("sleeping before main llm call")
+                        sleep(2) # to handle too many requests
                         completion = llm_client.chat.completions.create(
                             model=MODEL_NAME,
                             messages=messages,
