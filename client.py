@@ -74,6 +74,11 @@ async def sampling_message_callback(
         stopReason="endTurn",
     )
 
+async def notifications_callback(
+        params: types.LoggingMessageNotificationParams,
+) -> None:
+    print(params)
+
 async def main():
     server_params = StdioServerParameters(
         command="python",
@@ -84,7 +89,8 @@ async def main():
         async with ClientSession(
                 read,
                 write,
-                sampling_callback=sampling_message_callback
+                sampling_callback=sampling_message_callback,
+                logging_callback=notifications_callback
         ) as session:
             await session.initialize()
 
@@ -95,6 +101,17 @@ async def main():
 
             result = await session.read_resource("fedresurs://contracts/2025-01-20/2025-02-01")
             contracts = json.loads(result.contents[0].text)["contracts"]
+
+            # input_text = (
+            #     'Компания: ООО "СТРОЙМАГИСТРАЛЬ"\n'
+            #     "Дата заключения контракта: 14.04.2025\n"
+            #     "Информация о контракте:\n"
+            #     "Предмет финансовой аренды: LZZ7CMWDXRC643572, 0106008 экскаваторы, SITRAK C7H MAX\n"
+            #     "Срок финансовой аренды: 15.04.2025 - 15.03.2028\n"
+            #     "Комментарий пользователя: <res>Заключение</res>"
+            # )
+            #
+            # contracts = [input_text]
 
             with OpenAI(base_url=TOGETHER_URL, api_key=API_KEY) as llm_client:
                 for contract in contracts:
