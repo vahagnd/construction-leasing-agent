@@ -9,7 +9,6 @@ import random
 import asyncio
 from dotenv import load_dotenv
 
-
 load_dotenv()
 
 CONTRACTS_PATH = os.getenv("CONTRACTS_PATH")
@@ -31,7 +30,6 @@ def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='202
     first_info_json = first_response.json()
 
     contracts_found = first_info_json['found']
-    # print(f"Contracts found: {contracts_found}")
     time.sleep(random.uniform(1, 4))
 
     for offset in range(0, contracts_found, 15):
@@ -55,10 +53,8 @@ def parse_data_from_fedresurs(start_date: str ='2025-01-01', end_date: str ='202
             continue
         time.sleep(random.uniform(2, 6))
 
-    # print(f"Contracts parsed: {len(data)}")
     return list(set(data))
 
-# -- Resource: fetch info from website
 @mcp.resource("fedresurs://contracts/{start_date}/{finish_date}")
 def fetch_contracts(start_date: str, finish_date: str) -> dict:
     """
@@ -68,7 +64,6 @@ def fetch_contracts(start_date: str, finish_date: str) -> dict:
     raw_data_list = parse_data_from_fedresurs(start_date, finish_date)  # list[str]
     return {"contracts": raw_data_list}
 
-# -- Tool: create or modify text document
 @mcp.tool()
 async def save_leasing_info(contract_info: str, ctx: Context) -> None:
     """
@@ -91,8 +86,6 @@ async def save_leasing_info(contract_info: str, ctx: Context) -> None:
     await ctx.info("Контракт сохранен.")
     return None
 
-
-# # -- Prompt: all logic is embedded into a single prompt template
 # @mcp.prompt()
 # def promptishe(contract_text: str) -> str:
 #     return (
@@ -111,7 +104,6 @@ async def save_leasing_info(contract_info: str, ctx: Context) -> None:
 #         "\nОтвет:"
 #     )
 
-# -- Tool : calls model giving it prompt via client sampling
 @mcp.tool()
 async def analyze_contract_text(contract_text: str, ctx: Context) -> str:
     """

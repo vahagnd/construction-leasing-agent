@@ -5,8 +5,11 @@ from dotenv import load_dotenv
 import json
 from openai import OpenAI
 import os
-from pprint import pprint
+from pprint import pformat
+import logging
+from time import sleep
 
+logger = logging.getLogger(__name__)
 load_dotenv()
 
 API_KEY = os.getenv("TOGETHER_API_KEY")
@@ -17,7 +20,7 @@ tools_specs = []
 
 def set_tools(tools: list[types.Tool]):
     for tool in tools:
-        print(f"Register tool: {tool.name}")
+        logger.info("register tool: %s", pformat(tool.name))
         tools_specs.append({
             'type': 'function',
             'function': {
@@ -40,11 +43,10 @@ async def sampling_message_callback(
         context,
         params: types.CreateMessageRequestParams,
 ) -> types.CreateMessageResult:
-    # print("*************************")
-    # print(f"Sampling: {params}")
+    logging.debug("sampling: %s", params)
 
     input_message = params.messages[0]
-    # print(f"Sampling message: {input_message}")
+    logging.debug("sampling message: %s", input_message)
     messages = [
         {
             "role": input_message.role,
@@ -52,23 +54,24 @@ async def sampling_message_callback(
         }
     ]
 
+    sleep(1) # to handle too many requests
+    logging.debug("sleeping for 1 second")
     with OpenAI(base_url=TOGETHER_URL, api_key=API_KEY) as sampling_llm_client:
         completion = sampling_llm_client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
         )
 
-        # print(f"Sampling Completion response: {completion}")
+        logging.debug("sampling completion response: %s", completion)
         resp_choice = completion.choices[0]
-        reps_message = resp_choice.message.content
-        # print(f"Sampling Message response: {reps_message}")
-    # print("*************************")
+        resp_message = resp_choice.message.content
+        logging.debug("sampling message response: %s", resp_message)
 
     return types.CreateMessageResult(
         role="assistant",
         content=types.TextContent(
             type="text",
-            text=reps_message,
+            text=resp_message,
         ),
         model=MODEL_NAME,
         stopReason="endTurn",
@@ -77,7 +80,7 @@ async def sampling_message_callback(
 async def notifications_callback(
         params: types.LoggingMessageNotificationParams,
 ) -> None:
-    print(params)
+    logger.info(params)
 
 async def main():
     server_params = StdioServerParameters(
@@ -96,22 +99,21 @@ async def main():
 
             tools_response = await session.list_tools()
             set_tools(tools_response.tools)
-            print("Tools:")
-            pprint(tools_specs)
+            logger.info("tools:\n%s", pformat(tools_specs))
 
-            result = await session.read_resource("fedresurs://contracts/2025-01-20/2025-02-01")
-            contracts = json.loads(result.contents[0].text)["contracts"]
+            # result = await session.read_resource("fedresurs://contracts/2025-01-20/2025-02-01")
+            # contracts = json.loads(result.contents[0].text)["contracts"]
 
-            # input_text = (
-            #     'Компания: ООО "СТРОЙМАГИСТРАЛЬ"\n'
-            #     "Дата заключения контракта: 14.04.2025\n"
-            #     "Информация о контракте:\n"
-            #     "Предмет финансовой аренды: LZZ7CMWDXRC643572, 0106008 экскаваторы, SITRAK C7H MAX\n"
-            #     "Срок финансовой аренды: 15.04.2025 - 15.03.2028\n"
-            #     "Комментарий пользователя: <res>Заключение</res>"
-            # )
-            #
-            # contracts = [input_text]
+            input_text = (
+                'Компания: ООО "СТРОЙМАГИСТРАЛЬ"\n'
+                "Дата заключения контракта: 14.04.2025\n"
+                "Информация о контракте:\n"
+                "Предмет финансовой аренды: LZZ7CMWDXRC643572, 0106008 экскаваторы, SITRAK C7H MAX\n"
+                "Срок финансовой аренды: 15.04.2025 - 15.03.2028\n"
+                "Комментарий пользователя: <res>Заключение</res>"
+            )
+
+            contracts = [input_text]
 
             with OpenAI(base_url=TOGETHER_URL, api_key=API_KEY) as llm_client:
                 for contract in contracts:
@@ -147,26 +149,24 @@ async def main():
                             tools=current_tools
                         )
 
-                        # print("\nCompletion response:")
-                        # pprint(completion)
+                        logger.debug("completion response:\n%s", pformat(completion))
                         resp_choice = completion.choices[0]
                         messages.append(resp_choice.message)
-                        # print("\nCompletion message:")
-                        # pprint(resp_choice.message)
+                        logger.debug("completion message:\n%s", pformat(resp_choice))
 
                         reason = resp_choice.finish_reason
 
                         if reason == "tool_calls":
                             response_tools = resp_choice.message.tool_calls
                             tool_call = response_tools[0]
-                            # print(f"Tool call response: {tool_call}, {type(tool_call)}")
+                            logger.debug("tool call response: %s, %s", tool_call, type(tool_call))
 
                             tool_call_args = json.loads(tool_call.function.arguments)
-                            # print(f"Tool call args: {tool_call_args}, {type(tool_call_args)}")
+                            logger.debug("tool call args: %s, %s", tool_call_args, type(tool_call_args))
 
                             result_tool = await session.call_tool(tool_call.function.name, arguments=tool_call_args)
                             tool_response = result_tool.content[0].text
-                            # print(f"Tool response: {tool_response}")
+                            logger.debug("tool response: %s", tool_response)
 
                             messages.append({
                                 "role": "tool",
@@ -176,17 +176,19 @@ async def main():
                             })
                         else:
                             final_answer = resp_choice.message.content
-                            # print(f"Final answer: {final_answer}")
+                            logger.debug("final answer: %s", final_answer)
 
                             if final_answer.strip() != "400":
-                                # print("Saving contract to JSON...")
+                                logger.info("saving contract to json")
                                 args = {"contract_info": final_answer}
-                                save_result = await session.call_tool("save_leasing_info", arguments=args)
-                                # print(save_result)
+                                await session.call_tool("save_leasing_info", arguments=args)
                             break
-                        # print("messages: ")
-                        # pprint(messages)
+                        logger.debug("messages:\n%s", messages)
                         tool_used = True
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s:%(module)s - %(message)s"
+    )
     asyncio.run(main())
